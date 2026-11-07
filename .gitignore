@@ -2,4 +2,3 @@ __pycache__/
 *.pyc
 raw/news/log*.txt
 第九輪_上櫃融資維持率/raw/fetch_log.txt
-第九輪_上櫃融資維持率/raw/daily/

@@ -7,11 +7,12 @@ HERE = Path(__file__).parent; RAW = HERE / "raw"; OUT = HERE / "out"; OUT.mkdir(
 rows, last = [], {}
 for f in sorted((RAW / "daily").glob("*.json.gz")):
     d = json.load(gzip.open(f, "rt", encoding="utf-8"))
-    cl = {k: v for k, v in d["close"].items() if v and v > 0}
+    cl = {k.strip(): v for k, v in d["close"].items() if v and v > 0}
     if not cl: continue                                   # 尚無收盤行情的早期日期
     last.update(cl)
     mv = cov = tot = 0.0
     for k, sh in d["margin"].items():
+        k = k.strip()
         if not sh: continue
         tot += sh
         if k in last: mv += sh * 1000 * last[k]; cov += sh
@@ -37,8 +38,15 @@ def splice(real, proxy_ret):
     # 先換算成價格再對齊交易日（避免非交易日報酬遺失）
     w = (1 + r.fillna(0)).cumprod().reindex(ix.union(dates)).ffill().reindex(dates)
     return w.pct_change().fillna(0)
-r50 = splice(e50, txr)
-r2 = splice(l2, 2 * taiex.pct_change() + 0.03 / 252 * 2 - 0.01 / 252 - 0.01 / 252)   # 正2 模擬：2倍指數+股息 − 費用 − 借款
+# Yahoo 台股早期還原價有明顯錯誤（如 0050 2014-01-02 單日 +75%），改用加權指數重建：
+# 0050 ≈ 加權指數 + 3%/年股息 − 0.4%/年費用；正2 ≈ 每日 2 倍（指數+股息）− 1%/年費用 − 1%/年借款
+def onindex(r):
+    w = (1 + r.fillna(0)).cumprod().reindex(r.index.union(dates)).ffill().reindex(dates); return w.pct_change().fillna(0)
+r50 = onindex(txr - 0.004 / 252)
+r2 = onindex(2 * txr - 0.02 / 252)
+# 核對：正2 上市且資料穩定後（2015-02 起）模擬 vs 實際
+chk = pd.DataFrame({"sim": r2, "real": l2.pct_change().reindex(dates)}).loc["2015-02-01":"2026-10-31"].dropna()
+chk = chk[chk.real.abs() < 0.15]
 CASH = 0.01 / 252; COST = 0.001
 
 def backtest(buy, sell, r, ratio=mr.ratio):
@@ -78,6 +86,7 @@ P(f"維持率期間：{dates[0].date()} ~ {dates[-1].date()}，{len(dates)} 個�
 P(f"維持率分布：最低 {mr.ratio.min():.0f}（{mr.ratio.idxmin().date()}），最高 {mr.ratio.max():.0f}（{mr.ratio.idxmax().date()}），中位數 {mr.ratio.median():.0f}")
 P(f"低於150的天數 {int((mr.ratio<150).sum())}，低於145 {int((mr.ratio<145).sum())}，高於205 {int((mr.ratio>205).sum())}，高於210 {int((mr.ratio>210).sum())}")
 bh50 = summ(r50); bh2 = summ(r2)
+P(f"正2 模擬 vs 實際（2015-02~2026-10）：年化 {((1+chk.sim).prod())**(252/len(chk))-1:.2%} vs {((1+chk.real).prod())**(252/len(chk))-1:.2%}，日報酬相關 {chk.corr().iloc[0,1]:.3f}")
 P(f"\n買進持有 0050：年化 {bh50[0]:.2%}，最大回撤 {bh50[1]:.1%}｜買進持有 正2：年化 {bh2[0]:.2%}，最大回撤 {bh2[1]:.1%}")
 res = []
 for nm, r in (("0050", r50), ("正2", r2)):
